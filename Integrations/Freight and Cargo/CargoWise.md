@@ -5,16 +5,37 @@
 
 ---
 
-## 1. Connection & Authentication Workflow
+## 1. System Architecture & Flow (Mermaid Diagram)
 
-CargoWise exposes integration capabilities primarily via **eAdaptor** (a SOAP/REST web service interface) or **CargoWise eServices / API Gateway**.
+CargoWise exposes integration capabilities primarily via **eAdaptor** (a SOAP/REST web service interface) or **CargoWise eServices / API Gateway**. The diagram below illustrates the end-to-end flow between an external application, the eAdaptor gateway, and the CargoWise Enterprise database/workflows behind it.
 
-```
-+-------------------+        1. TLS / API Key / OAuth       +---------------------------+        3. eAdaptor Ingestion       +------------------------+
-|                   |  --------------------------------->  |                           |  ----------------------------->  |                        |
-| Your Application  |                                      | CargoWise eAdaptor        |                                  | CargoWise Enterprise   |
-|                   |  <---------------------------------  | Gateway Service           |  <-----------------------------  | Database & Workflows   |
-+-------------------+      2. XML Envelope (Universal)     +---------------------------+        4. XML Response / ACK     +------------------------+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor App as External Application
+    participant Gateway as CargoWise eAdaptor Gateway
+    participant Enterprise as CargoWise Enterprise DB &amp; Workflows
+
+    Note over App, Gateway: Phase 1: Connection &amp; Authentication
+    App->>Gateway: HTTPS connection (Basic Auth over TLS, or WS-Security header: ClientID / UserId / Password)
+    Gateway-->>App: TLS session established
+
+    Note over App, Enterprise: Phase 2: Shipment / Booking Submission
+    App->>App: Construct UniversalShipment XML (DataContext, Parties, Routing, PackingLineCollection)
+    App->>Gateway: POST /eAdaptor/eAdaptorInboundService.svc (UniversalShipment XML envelope)
+    activate Gateway
+    Gateway->>Gateway: Validate schema + envelope metadata
+    Gateway->>Enterprise: eAdaptor ingestion (UniversalShipment)
+    activate Enterprise
+    Enterprise-->>Gateway: Record created / workflow triggered
+    deactivate Enterprise
+    Gateway-->>App: UniversalResponse XML (ACK or validation errors)
+    deactivate Gateway
+
+    Note over Enterprise, App: Phase 3: Status &amp; Event Updates
+    Enterprise->>Gateway: UniversalEvent raised (status change, milestone)
+    Gateway->>App: eAdaptor outbound POST (UniversalEvent XML)
+    App-->>Gateway: 200 OK (Ack)
 ```
 
 ### Protocol & Security
