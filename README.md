@@ -9,4 +9,5 @@ Navigation index for this organization's GitHub assets. For the platform overvie
 | **[User Stories](https://github.com/DIGASSAY/digassay/issues)** | Numbered, `area:*`-labelled, all `status:complete` |
 | **[User Stories board](https://github.com/orgs/DIGASSAY/projects/1)** | Same stories, grouped and filterable |
 | **[Freight & Cargo 1.00](<Integrations/Freight and Cargo/Freight and Cargo 1.00.md>)** | Vendor integration architecture, linking to the CargoWise, Coneksion and OpenLink Endur child pages |
+| **[Knowledge Base — Historical Deliveries](<Knowledge Base/Historical Deliveries.md>)** | Roadmap — cloud/on-prem/hybrid hosting, our own open-source LLM + private vector store |
 | **[.github](https://github.com/DIGASSAY/.github)** | Source of the org profile README |
