@@ -1,83 +1,46 @@
 # Immutable Data — Execution
 
-See **[Overview](Overview.md)** for why, and **[Concept](Concept.md)** for the model. This page grounds it in one real, illustrative technology stack and shows what the pieces would actually look like — not a commitment to build on this specific platform, but a concrete example proving the model in [Concept](Concept.md) is buildable with mature, existing tools rather than something speculative.
+See **[Overview](Overview.md)** for why, and **[Concept](Concept.md)** for the model. This page describes how the live product actually implements it, then sketches the genuine multi-party extension the model in [Concept](Concept.md) points toward.
 
-## 1. Illustrative platform: a permissioned distributed ledger
+## 1. What's actually running
 
-**Hyperledger Fabric** (Linux Foundation) is used here as the illustrative reference — a mature, permissioned distributed-ledger platform purpose-built for exactly the shape described in [Concept](Concept.md): known, identified participants; a shared hash-linked ledger; and, critically, a native mechanism for restricting a given record's actual contents to a named subset of participants while every participant still shares the same tamper-evident history. Other permissioned platforms offer comparable mechanics — Fabric is chosen here because its two building blocks map directly onto the two needs in [Concept](Concept.md):
+Every contract's history is one hash-linked chain in DIGASSAY's own database (`DigAssay.LedgerEntry`, `digassay-api`), appended to and read through a small service (`src/services/ledger.js`):
+
+| Column | Purpose |
+| :--- | :--- |
+| `SupplyContractId`, `SequenceNo` | Which contract's chain this entry belongs to, and its position in it |
+| `SourceType`, `SourceId` | What kind of event this is (an inspection, a seller/buyer/umpire assay, a private or shared assay report, an umpire determination) and which underlying record it came from |
+| `VisibilityRoles` | Who is entitled to read this entry's contents — a comma list of roles, or `ALL` |
+| `PayloadJson` | The event's own data, snapshotted at commit time |
+| `PrevHash`, `EntryHash` | The fingerprint chain described in [Concept](Concept.md) |
+| `EventAtUtc` | The real-world event time used to order the chain |
+
+`appendEntry()` computes each new `EntryHash` from the previous entry's hash plus the new payload, and writes the row. `viewAs(role)` reads the chain back and, for any entry whose `VisibilityRoles` doesn't include the requesting role, returns the hash and metadata but redacts the payload to `{ restricted: true }` — the entry's existence and position in the chain are never hidden, only its contents. On every read, `verifyChain()` recomputes each entry's hash from its stored payload and compares it against what was recorded — not a cached "valid" flag — so the live view can show, per entry, whether it still checks out.
+
+## 2. Where it shows up
+
+- **`/contracts/:id` → Immutable Data** — the full chain for a contract: every inspection, every assay, every private and shared report and umpire determination, in order, with a "View as" role selector (Public, Seller, Buyer, Umpire, Carrier) that drives the same redaction `viewAs()` performs server-side.
+- **`/contracts/:id/quality-compliance`** — the agreed Quality Specification's parameters against every assay report that's arrived, one column per report, each cell locked or readable depending on the same visibility rule. A **Trigger umpire process** button picks an existing report at random, simulates a binding Umpire Determination against it (visible to every role, matching real umpire-assay convention), and appends it to the same chain.
+- A demo-only **unlock (demo)** toggle, per item and in bulk, lets a visitor reveal what a restricted entry actually contains without needing a real counterparty session — clearly marked as a demonstration affordance, not something a real deployment would expose.
+
+## 3. Report types and who's entitled to read them
+
+| `SourceType` | Who can read the contents |
+| :--- | :--- |
+| `EVIDENCE`, `ASSAY_SELLER`, `ASSAY_BUYER`, `ASSAY_UMPIRE`, `ASSAY_FINAL` | Set per record, matching the real Seller/Buyer/Umpire assay-exchange process |
+| `ASSAY_REPORT_PRIVATE_EXTRACTION`, `ASSAY_REPORT_PRIVATE_DELIVERY` | Seller and Umpire only |
+| `ASSAY_REPORT_SHARED_WITH_CUSTOMER` | All parties |
+| `ASSAY_REPORT_UMPIRE_DETERMINATION` | All parties — a ruling that resolves a dispute is shared, not private to one side |
+
+## 4. The genuine multi-party extension
+
+Today the chain lives in one database — DIGASSAY's own — so a counterparty still has to trust DIGASSAY's server to report the true recomputed hash honestly, even though tampering with historical data is immediately detectable by that same recomputation. The natural next step is spreading custody across the counterparties themselves, so no single organisation, DIGASSAY included, holds the only copy. **Hyperledger Fabric** (Linux Foundation) is a mature, permissioned distributed-ledger platform purpose-built for exactly that shape — its two building blocks map directly onto what [Concept](Concept.md) describes:
 
 | Fabric concept | Maps to |
 | :--- | :--- |
-| **Channel** | A sub-ledger visible only to its members — e.g. one channel per counterparty pair, or one per contract |
-| **Private Data Collection** | Within a channel, a record whose actual contents are stored only on the peers of *named* authorised organisations — every other channel member still sees a tamper-evident hash of it on the shared ledger, just not the contents |
-| **Organisation / MSP (Membership Service Provider)** | Each counterparty (seller, buyer, umpire, carrier) is a distinctly identified organisation, admitted via a certificate authority — mapped, in DIGASSAY's case, onto the real company/LEI registry identity already established for counterparties today |
+| **Channel** | A sub-ledger visible only to its members — e.g. one channel per contract |
+| **Private Data Collection** | Within a channel, a record whose actual contents are stored only on the peers of *named* authorised organisations — every other channel member still sees a tamper-evident hash of it, just not the contents |
+| **Organisation / MSP** | Each counterparty (seller, buyer, umpire, carrier) as a distinctly identified organisation — mapped onto the same real company/LEI registry identity DIGASSAY already establishes for counterparties today |
 | **Ordering service** | Agrees the sequence new entries are appended in, so every participant's copy of the ledger ends up identical |
 
-## 2. Participants
-
-| Organisation | Role | Sees |
-| :--- | :--- | :--- |
-| Seller | Commissions private assays, ships product | Own private records + full shared chain hashes |
-| Buyer | Receives product, contests quality | Own private records + full shared chain hashes |
-| Umpire / Assayist | Produces assay reports | Only the private collection(s) it's named on |
-| Carrier | Executes a transport leg | Only inspection reports for legs it's party to |
-| DIGASSAY | Orders/sequences entries, hosts the application layer | Chain hashes for every record; contents only where explicitly a named party |
-
-## 3. Data flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant App as DIGASSAY Application
-    participant S as Seller Org Peer
-    participant B as Buyer Org Peer
-    participant U as Umpire Org Peer
-    participant O as Ordering Service
-    participant L as Shared Ledger (all orgs)
-
-    App->>S: New EvidenceRecord (leg #3 inspection)
-    S->>S: Hash record + link to prior hash
-    alt Record is restricted (private assay)
-        S->>U: Write full record to shared Private Data Collection
-        S->>O: Submit hash-only commitment
-    else Record is chain-wide visible (delivery milestone)
-        S->>O: Submit full record
-    end
-    O->>L: Append to hash-linked chain (all orgs receive the same block)
-    L-->>B: Buyer's peer verifies chain integrity
-    Note over B: Buyer sees the hash and timestamp<br/>even for records it can't read the contents of
-```
-
-Every participant's peer independently verifies each new entry links correctly to the one before it before accepting it — there's no single "master" copy any one organisation, DIGASSAY included, could quietly edit without every other peer's copy immediately disagreeing.
-
-## 4. Illustrative private collection definition
-
-A record's visibility is declared at the point it's written, not bolted on afterwards. Illustrative — the exact syntax is platform-specific and this is not a published DIGASSAY schema:
-
-```json
-{
-  "collectionName": "seller_commissioned_assay_SC-000002_delivery_7",
-  "policy": "OR('SellerOrgMSP.member', 'AssayistOrgMSP.member')",
-  "memberOnlyRead": true,
-  "requiredPeerCount": 1,
-  "maxPeerCount": 2,
-  "blockToLive": 0
-}
-```
-
-`policy` names exactly which organisations' peers are allowed to hold and read the actual contents — here, only the Seller and the named Assayist. Every other organisation on the same channel — including the Buyer and DIGASSAY's own ordering layer — still receives and can verify the record's hash commitment on the shared ledger, just never the underlying document, unless a future entry (e.g. a dispute escalation) explicitly widens the policy to add them.
-
-## 5. Where DIGASSAY's existing data maps in
-
-No new data model is needed — the roadmap step maps records that already exist in the live product:
-
-| Live today (`digassay-api`) | Roadmap ledger role |
-| :--- | :--- |
-| `EvidenceRecord` | One entry per inspection — chain-wide visible, or restricted via a Private Data Collection depending on `Outcome`/parties involved |
-| `AssayExchange` / assay records | Seller/Buyer/Umpire results — each result restricted to the org(s) that produced it until formally exchanged |
-| `DeliveryLegTracking` | Chain-wide visible milestones (planned/actual timestamps) — the backbone of the shared, always-visible part of the chain |
-| Company/LEI registry identity | Root of the org/MSP identity used to admit participants |
-
-## Status
-
-Roadmap — illustrative only. No ledger platform has been selected or committed to; Fabric is used above because its mechanics are a close, provable match to the model in [Concept](Concept.md), not because it's the intended production choice.
+This is named here as a concrete, provable example that the model is buildable with mature, existing tools — not a commitment to build on this specific platform, and no ledger platform has been selected.

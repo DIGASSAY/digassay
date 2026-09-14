@@ -1,6 +1,6 @@
 # Immutable Data — Overview
 
-A roadmap capability: a tamper-evident, shared history of trade events that counterparties can rely on without taking either side's word for it. Three pages cover it — this **Overview** (why it matters, in plain terms), **[Concept](Concept.md)** (the model, without the jargon), and **[Execution](Execution.md)** (how it would actually be built).
+A tamper-evident, shared history of trade events that counterparties can rely on without taking either side's word for it — live today on every supply contract. Three pages cover it — this **Overview** (why it matters, in plain terms), **[Concept](Concept.md)** (the model, without the jargon), and **[Execution](Execution.md)** (how it's actually built).
 
 ## The problem it solves
 
@@ -8,16 +8,14 @@ A physical trade dispute is hard to resolve cleanly because there usually isn't 
 
 ## What "immutable" means here
 
-Not that nothing can ever change — new information is added constantly (a fresh assay result, a follow-up inspection, an updated status). It means what's *already been recorded* can never be silently altered or deleted. A correction is itself a new, dated entry layered on top of the old one, never a rewrite of it. Anyone with access to a record can independently verify it hasn't been tampered with since it was written — they don't have to trust the platform, or the counterparty, to tell them so.
+Not that nothing can ever change — new information is added constantly (a fresh assay result, a follow-up inspection, an updated status). It means what's *already been recorded* can never be silently altered or deleted. A correction is itself a new, dated entry layered on top of the old one, never a rewrite of it. Anyone with access to a record can independently verify it hasn't been tampered with since it was written.
 
-## Today vs. the roadmap
+## Live today
 
-The live platform already behaves this way at the *database* level: the Inspection Evidence and Assay records tables are insert-only — there is no code path that updates or deletes a row once written (see `usp_EvidenceRecord_Create`, `usp_AssayExchange_SetOutcome`, which only ever add). That's honest append-only behaviour today, but it's a property of the application code, not something a counterparty could independently verify without trusting DIGASSAY's own server. The roadmap step described in [Concept](Concept.md) and [Execution](Execution.md) is making that tamper-evidence **independently provable** — hash-linked and shared across the counterparties themselves, not just a convention inside one party's own database.
+Every delivery milestone, inspection finding and assay outcome on a DIGASSAY contract is committed to a hash-linked ledger, one chain per contract — see **[Concept](Concept.md)** for the model and **[Execution](Execution.md)** for the real schema and service behind it. The **Quality Compliance** page builds directly on it: the agreed Quality Specification's parameters, fixed down the left, against every assay report that's arrived for a delivery — a private report commissioned at the point of extraction, a private one at the delivery point, one shared with the customer — each measured value graded against its agreed band and colour-coded by deviation. A **Trigger umpire process** action picks one of those reports at random as the disputed assay, simulates a binding Umpire Determination against it, and emails the resulting profit-and-loss impact before it ever appears on screen.
 
 ## Who sees what
 
-Not every record should be visible to every counterparty. A seller may commission a private assay report from their own umpire before ever sharing a number with the buyer; an inspection report might be relevant only to the two parties present at that leg, not the whole chain of custody. "Immutable" and "visible to everyone" are treated as two separate properties, not one — see **[Concept](Concept.md#selective-visibility)** for how a record can be tamper-evident and provably unaltered while its actual contents stay restricted to the parties entitled to read it.
+Not every record is visible to every counterparty. A seller may commission a private assay report before ever sharing a number with the buyer; an inspection report might be relevant only to the two parties present at that leg, not the whole chain of custody. "Tamper-evident" and "visible to everyone" are two separate properties here, not one — see **[Concept](Concept.md#4-selective-visibility)** for how a record can be provably unaltered while its actual contents stay restricted to the parties entitled to read it. The live demo also carries a "View as" role selector and a per-item/bulk **unlock (demo)** toggle, purely so a visitor can explore what a restricted record actually contains without needing a real counterparty login.
 
-## Status
-
-Roadmap — not yet built. It extends the **Inspection Evidence** and **Assay Exchange** records already live in the [Delivery Diary](https://digassay.nrgpix.com) today; see **[digassay.nrgpix.com](https://digassay.nrgpix.com)** for the current, insert-only version of these records.
+See **[digassay.nrgpix.com](https://digassay.nrgpix.com)** — open any contract's Immutable Data view or its Quality Compliance page to see a real chain.
