@@ -38,42 +38,69 @@ sequenceDiagram
     App-->>Gateway: 200 OK (Ack)
 ```
 
-### Protocol & Security
-* **Interface**: eAdaptor Inbound Web Service (SOAP or REST endpoint).
-* **Data Format**: WiseTech Universal XML (`UniversalShipment` or `UniversalEvent`).
-* **Authentication**: Basic Authentication (over SSL/TLS) or WS-Security Header with Enterprise Credentials (`ClientID`, `UserId`, `Password`).
+---
 
-### Integration Steps
-1. **XML Construction**: Construct a valid `UniversalShipment` XML schema representing the booking/shipment.
-2. **Envelope Wrapping**: Wrap the payload in an eAdaptor messaging wrapper containing metadata header tags.
-3. **HTTP Post**: Send an HTTP POST request to the target organization's eAdaptor endpoint (`https://<partner_instance>.cargowise.com/eAdaptor/eAdaptorInboundService.svc`).
-4. **Acknowledgement Handling**: Receive a synchronous `UniversalResponse` XML indicating success or schema validation errors.
+## 2. Authentication & Connection Protocol
+
+Unlike a typical OAuth-fronted REST API, eAdaptor authenticates every call directly against Enterprise credentials issued by the target CargoWise instance - there is no separate bearer-token exchange step. Two supported connection methods:
+
+### Option A: HTTP Basic Authentication (over TLS)
+
+`POST https://<partner_instance>.cargowise.com/eAdaptor/eAdaptorInboundService.svc`
+
+```http
+Authorization: Basic base64(ClientID:UserId:Password)
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "http://www.wisetechglobal.com/eAdaptor/2011/03/SubmitShipment"
+```
+
+### Option B: WS-Security UsernameToken Header (SOAP)
+
+```xml
+<soapenv:Header>
+  <wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+    <wsse:UsernameToken>
+      <wsse:Username>ClientID/UserId</wsse:Username>
+      <wsse:Password Type="...#PasswordText">Password</wsse:Password>
+    </wsse:UsernameToken>
+  </wsse:Security>
+</soapenv:Header>
+```
+
+### Successful Connection Indicator
+
+There is no standalone "token response" - a successful connection is confirmed by the first `UniversalResponse` acknowledgement returned for a submitted message (see §5):
+
+```xml
+<UniversalResponse xmlns="http://www.wisetechglobal.com/eAdaptor/2011/03">
+  <Status>SUCCESS</Status>
+  <ReceivedDataContext>
+    <EnterpriseID>LOG</EnterpriseID>
+    <ServerID>PROD</ServerID>
+    <CompanyCode>LOGSGS</CompanyCode>
+  </ReceivedDataContext>
+  <TransactionID>eAdaptor-20260914-004471</TransactionID>
+</UniversalResponse>
+```
+
+Credentials, endpoint hostnames and company/server codes are issued per-partner by the CargoWise Enterprise administrator - there is no self-service sandbox signup.
 
 ---
 
-## 2. Payload Data Required for Shipment / Booking Ingestion
+## 3. eAdaptor Message Operations
 
-CargoWise uses a comprehensive XML structure called `UniversalShipment`. Below are the core fields required to create a new forwarder booking or shipment record.
+eAdaptor is message-type-oriented rather than REST-resource-oriented - each operation is a distinct XML document type submitted to the same inbound endpoint (or received at your own outbound listener), not a separate URL path per action.
 
-### Key Data Fields
-
-| Data Section | Field Path / Element | Description / Requirements |
-| :--- | :--- | :--- |
-| **Sender/Recipient Info** | `<SenderID>`, `<RecipientID>` | Identifies originating system and targeted CargoWise company code |
-| **Shipment Header** | `<DataContext><EnterpriseID>` | CargoWise Enterprise code (e.g., `ABC`) |
-| | `<DataContext><CompanyCode>` | Branch/Company code (e.g., `ABCSIN`) |
-| | `<DataContext><ServerID>` | Target server instance ID |
-| **Parties** | `<OrganizationAddressCollection>` | List of addresses keyed by Type (`Shipper`, `Consignee`, `Carrier`, `Broker`) |
-| **Routing Details** | `<PortOfLoading>` | UN/LOCODE or 3-letter port code |
-| | `<PortOfDischarge>` | UN/LOCODE or 3-letter port code |
-| | `<TransportMode>` | Transport code (`SEA`, `AIR`, `ROA`, `BULK`) |
-| | `<VesselName>`, `<VoyageFlightNo>` | Name of vessel and voyage identifier |
-| **Cargo & Packing** | `<PackingLineCollection>` | Items breakdown: weight, volume, package count, marks & numbers |
-| **Custom References** | `<AdditionalReferenceCollection>` | External reference numbers (e.g., Customer PO Number, App Order ID) |
+| Operation | Direction | Message Type | Description |
+| :--- | :--- | :--- | :--- |
+| **Create / Update Shipment** | Inbound (App → CargoWise) | `UniversalShipment` | Submits a new booking or shipment record, or updates an existing one by `OrderNumber` / `ForwardingNumber`. |
+| **Acknowledge Submission** | Outbound (CargoWise → App) | `UniversalResponse` | Synchronous ack for an inbound message - success, or schema/business-rule validation errors. |
+| **Status / Milestone Event** | Outbound (CargoWise → App) | `UniversalEvent` | Raised when a tracked milestone changes (booking confirmed, vessel departed/arrived, customs cleared, etc.). |
+| **Cancel / Void Shipment** | Inbound (App → CargoWise) | `UniversalShipment` (`IsShipmentCancelled = true`) | Same message type as create/update, with the cancellation flag set. |
 
 ---
 
-## 3. Sample XML Request Payload (UniversalShipment Snippet)
+## 4. Full XML Payload Request Template (UniversalShipment)
 
 ```xml
 <UniversalShipment xmlns="http://www.wisetechglobal.com/eAdaptor/2011/03">
@@ -135,6 +162,97 @@ CargoWise uses a comprehensive XML structure called `UniversalShipment`. Below a
       </PackingLine>
     </PackingLineCollection>
 
+    <AdditionalReferenceCollection>
+      <AdditionalReference>
+        <Type>
+          <Code>CUR</Code>
+          <Description>Customer Reference</Description>
+        </Type>
+        <ReferenceNumber>PO-88213</ReferenceNumber>
+      </AdditionalReference>
+    </AdditionalReferenceCollection>
+
   </Shipment>
 </UniversalShipment>
 ```
+
+---
+
+## 5. Data Field Dictionary
+
+### DataContext / Header Fields
+
+| Field Path | Type | Required | Description / Allowed Values |
+| :--- | :--- | :--- | :--- |
+| `DataContext.EnterpriseID` | String | Yes | CargoWise Enterprise code issued to the partner (e.g. `LOG`). |
+| `DataContext.ServerID` | String | Yes | Target server instance (e.g. `PROD`, `UAT`). |
+| `DataContext.CompanyCode` | String | Yes | Branch/company code within the Enterprise (e.g. `LOGSGS`). |
+| `DataContext.DataProvider` | String | No | Identifies the originating external system for audit/support purposes. |
+| `LocalProcessing.OrderNumber` | String | Yes | Unique ID generated by your application (max 35 chars). |
+
+### Parties Fields (`OrganizationAddressCollection`)
+
+| Field Path | Type | Required | Description / Allowed Values |
+| :--- | :--- | :--- | :--- |
+| `OrganizationAddress.AddressType` | String | Yes | Enum: `Shipper`, `Consignee`, `Carrier`, `Broker`, `NotifyParty`. |
+| `OrganizationAddress.CompanyName` | String | Yes | Legal name of the party. |
+| `OrganizationAddress.City` / `.Country` | String | Yes | City and ISO 3166-1 alpha-2 country code. |
+
+### Routing & Cargo Fields
+
+| Field Path | Type | Required | Description / Allowed Values |
+| :--- | :--- | :--- | :--- |
+| `TransportMode.Code` | String | Yes | Enum: `SEA`, `AIR`, `ROA` (road), `RAI` (rail), `BULK`. |
+| `PortOfLoading.Code` / `PortOfDischarge.Code` | String | Yes | UN/LOCODE or CargoWise 5-character port code (e.g. `DEHAM`, `SGSIN`). |
+| `VesselName` / `VoyageFlightNo` | String | No | Name of the assigned vessel and its voyage identifier. |
+| `PackingLineCollection.PackingLine.Weight` | Decimal | Yes | Gross weight value. |
+| `PackingLineCollection.PackingLine.WeightUnit` | String | Yes | Enum: `KG`, `LB`, `MT`. |
+| `PackingLineCollection.PackingLine.GoodsDescription` | String | Yes | Clear textual description of cargo. |
+| `AdditionalReferenceCollection.AdditionalReference.ReferenceNumber` | String | No | External reference (customer PO number, app order ID, etc.), tagged with a `Type.Code`. |
+
+---
+
+## 6. Outbound Event Notification (`UniversalEvent`)
+
+Once a tracked milestone changes inside CargoWise (booking confirmed, vessel departed/arrived, customs cleared), an outbound `UniversalEvent` message is sent to the endpoint agreed with the partner during onboarding.
+
+### Request Sent by CargoWise to the Partner Endpoint
+`POST https://api.yourapp.com/cargowise/events`
+
+#### HTTP Headers
+```http
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "http://www.wisetechglobal.com/eAdaptor/2011/03/UniversalEvent"
+```
+(Endpoint-level authentication - shared credentials or mutual TLS - is agreed per integration; CargoWise does not publish a standard payload-signature scheme the way a webhook-native platform would.)
+
+#### `UniversalEvent` XML Payload
+```xml
+<UniversalEvent xmlns="http://www.wisetechglobal.com/eAdaptor/2011/03">
+  <Event>
+    <DataContext>
+      <EnterpriseID>LOG</EnterpriseID>
+      <ServerID>PROD</ServerID>
+      <CompanyCode>LOGSGS</CompanyCode>
+    </DataContext>
+    <EventType>
+      <Code>VESSEL_DEPARTED</Code>
+      <Description>Vessel Departed Port of Loading</Description>
+    </EventType>
+    <EventDateTime>2026-10-05T12:00:00Z</EventDateTime>
+    <Shipment>
+      <LocalProcessing>
+        <OrderNumber>APP-2026-9921</OrderNumber>
+      </LocalProcessing>
+      <VesselName>OCEAN GIANT</VesselName>
+      <VoyageFlightNo>2026V01</VoyageFlightNo>
+      <PortOfLoading>
+        <Code>DEHAM</Code>
+      </PortOfLoading>
+    </Shipment>
+    <Remarks>Departed on schedule per carrier confirmation.</Remarks>
+  </Event>
+</UniversalEvent>
+```
+
+The receiving application should reply with a synchronous `UniversalResponse` (see §2) acknowledging receipt.
